@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Link Up Terror Maze</title>
+    <style>
+        * { box-sizing: border-box; user-select: none; touch-action: none; -webkit-tap-highlight-color: transparent; }
+        body {
+            background: #000; color: white; margin: 0;
+            display: flex; flex-direction: column; align-items: center;
+            font-family: 'Arial', sans-serif; overflow: hidden; height: 100vh;
+        }
+        #view-container {
+            position: relative; width: 100vw; height: 45vh;
+            background: #000; border-bottom: 4px solid #444;
+        }
+        canvas { width: 100%; height: 100%; image-rendering: pixelated; }
+        #flash {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: red; opacity: 0; pointer-events: none; z-index: 5;
+        }
+        #crosshair {
+            position: absolute; top: 50%; left: 50%;
+            transform: translate(-50%, -50%); font-size: 30px; z-index: 10;
+        }
+        .hud {
+            position: absolute; top: 0; left: 0; width: 100%;
+            display: flex; justify-content: space-around;
+            background: rgba(0,0,0,0.7); padding: 5px; font-weight: bold;
+        }
+        #gamepad {
+            width: 100%; height: 55vh;
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 20px; background: #111;
+        }
+        .d-pad { display: grid; grid-template-columns: repeat(3, 65px); gap: 8px; }
+        .btn-ctrl {
+            width: 65px; height: 65px; background: #222; border: 2px solid #444;
+            border-radius: 15px; display: flex; align-items: center; justify-content: center;
+            font-size: 26px; color: #fff; box-shadow: 0 5px #000;
+        }
+        .btn-ctrl:active { background: #444; transform: translateY(3px); box-shadow: 0 2px #000; }
+        #fire-btn {
+            width: 110px; height: 110px; background: #e74c3c;
+            border: 5px solid #811; border-radius: 50%;
+            color: white; font-weight: bold; font-size: 22px;
+            box-shadow: 0 8px #511;
+        }
+        #msg {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            font-size: 24px; font-weight: bold; text-align: center; display: none;
+            text-shadow: 2px 2px #000; z-index: 100;
+        }
+    </style>
+</head>
+<body>
+
+<div id="view-container">
+    <div id="flash"></div>
+    <canvas id="screen"></canvas>
+    <div id="crosshair">➕</div>
+    <div class="hud">
+        <span style="color:#ff3333">HP: <span id="hp">100</span>%</span>
+        <span style="color:#f1c40f">FASE: <span id="lvl">1</span></span>
+        <span style="color:#33ff33">ALVOS: <span id="cnt">10</span></span>
+    </div>
+    <div id="msg"></div>
+</div>
+
+<div id="gamepad">
+    <div class="d-pad">
+        <div class="btn-ctrl" style="grid-column:2" id="u">▲</div>
+        <div class="btn-ctrl" style="grid-column:1" id="l">◀</div>
+        <div class="btn-ctrl" style="grid-column:3" id="r">▶</div>
+        <div class="btn-ctrl" style="grid-column:2" id="d">▼</div>
+    </div>
+    <button id="fire-btn">FOGO</button>
+</div>
+
+<script>
+    const canvas = document.getElementById('screen');
+    const ctx = canvas.getContext('2d');
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    canvas.width = 160; canvas.height = 120;
+
+    let currentLevel = 1, kills = 0, hp = 100, exitOpen = false;
+    const wallColors = ["#ff3333", "#33ff33", "#3333ff", "#ffff33", "#ff8833", "#cc33ff", "#33ffff", "#ffffff", "#888888", "#ff0088"];
+    const emojis = ["👹", "👽", "💀", "🧛🏻‍♂️", "🧟‍♂️", "🕷️", "👁️", "🦂", "🧌", "🐲"];
+
+    let map = [];
+    const baseMap = [
+        [1,1,1,1,1,1,1,1,1,1],[1,0,0,0,0,0,0,0,0,1],[1,0,1,1,0,0,1,1,0,1],[1,0,0,0,0,0,0,0,0,1],[1,0,0,1,1,1,1,0,0,1],
+        [1,0,0,1,0,0,1,0,0,1],[1,0,0,0,0,0,0,0,0,1],[1,0,1,1,0,0,1,1,0,1],[1,0,0,0,0,0,0,0,0,1],[1,1,1,1,1,1,1,1,1,1]
+    ];
+
+    let player = { x: 1.5, y: 1.5, dir: 0, speed: 0.08, rot: 0.1 };
+    let inputs = { u: false, d: false, l: false, r: false };
+    let enemies = [];
+
+    function playSound(freq, dur) {
+        if (audioCtx.state === 'suspended') audioCtx.resume();
+        const osc = audioCtx.createOscillator();
+        const g = audioCtx.createGain();
+        osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+        osc.frequency.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + dur);
+        g.gain.setValueAtTime(0.2, audioCtx.currentTime);
+        osc.connect(g); g.connect(audioCtx.destination);
+        osc.start(); osc.stop(audioCtx.currentTime + dur);
+    }
+
+    function initLevel() {
+        map = baseMap.map(r => [...r]);
+        enemies = []; kills = 0; exitOpen = false;
+        document.getElementById('hp').innerText = Math.floor(hp);
+        document.getElementById('lvl').innerText = currentLevel;
+        document.getElementById('cnt').innerText = 10;
+       
+        for(let i=0; i<10; i++) {
+            let rx, ry;
+            do { rx = Math.random()*8+1; ry = Math.random()*8+1; } while(map[Math.floor(ry)][Math.floor(rx)] !== 0);
+            enemies.push({
+                x: rx, y: ry, alive: true, emoji: emojis[currentLevel-1],
+                vx: (Math.random() - 0.5) * 0.02,
+                vy: (Math.random() - 0.5) * 0.02
+            });
+        }
+    }
+
+    function shoot() {
+        playSound(100, 0.2);
+        document.getElementById('view-container').style.transform = `translateY(-10px)`;
+        document.getElementById('crosshair').innerText = "💥";
+        setTimeout(() => {
+            document.getElementById('view-container').style.transform = `translateY(0)`;
+            document.getElementById('crosshair').innerText = "➕";
+        }, 80);
+
+        enemies.sort((a,b) => a.dist - b.dist);
+        for(let en of enemies) {
+            if(!en.alive) continue;
+            let ang = Math.atan2(en.y - player.y, en.x - player.x) - player.dir;
+            while(ang < -Math.PI) ang += Math.PI*2; while(ang > Math.PI) ang -= Math.PI*2;
+            if(Math.abs(ang) < 0.3 && en.dist < 5) {
+                en.alive = false; en.emoji = "💥";
+                kills++;
+                document.getElementById('cnt').innerText = 10 - kills;
+                if(kills >= 10) {
+                    map[1][8] = 2; exitOpen = true;
+                    showMsg("🚪 PORTA ABERTA!");
+                }
+                break;
+            }
+        }
+    }
+
+    function showMsg(t) {
+        const m = document.getElementById('msg'); m.innerText = t; m.style.display = "block";
+        setTimeout(() => m.style.display = "none", 2000);
+    }
+
+    const bind = (id, k) => {
+        const el = document.getElementById(id);
+        el.onpointerdown = (e) => { e.preventDefault(); inputs[k] = true; };
+        el.onpointerup = () => inputs[k] = false;
+    };
+    bind('u','u'); bind('d','d'); bind('l','l'); bind('r','r');
+    document.getElementById('fire-btn').onpointerdown = (e) => { e.preventDefault(); shoot(); };
+
+    function update() {
+        if(hp <= 0) return;
+        if(inputs.l) player.dir -= player.rot;
+        if(inputs.r) player.dir += player.rot;
+        let m = 0;
+        if(inputs.u) m = player.speed; if(inputs.d) m = -player.speed;
+        if(m !== 0) {
+            let nx = player.x + Math.cos(player.dir)*m, ny = player.y + Math.sin(player.dir)*m;
+            let tile = map[Math.floor(ny)][Math.floor(nx)];
+            if(tile === 0) { player.x = nx; player.y = ny; }
+            if(tile === 2) {
+                currentLevel++;
+                hp = Math.min(100, hp + 15); // Ganha vida ao passar
+                initLevel();
+            }
+        }
+
+        enemies.forEach(en => {
+            if(en.alive) {
+                // Movimento Aleatório
+                let nx = en.x + en.vx;
+                let ny = en.y + en.vy;
+                if(map[Math.floor(ny)][Math.floor(nx)] === 0) {
+                    en.x = nx; en.y = ny;
+                } else {
+                    en.vx = (Math.random() - 0.5) * 0.03;
+                    en.vy = (Math.random() - 0.5) * 0.03;
+                }
+
+                en.dist = Math.hypot(player.x - en.x, player.y - en.y);
+                if(en.dist < 0.4) {
+                    hp -= 1; // Perda de 1%
+                    document.getElementById('hp').innerText = Math.floor(hp);
+                    document.getElementById('flash').style.opacity = 0.5;
+                    setTimeout(()=>document.getElementById('flash').style.opacity = 0, 50);
+                    if(hp <= 0) { showMsg("FIM DE JOGO"); setTimeout(()=>location.reload(), 2000); }
+                }
+            } else { en.dist = Math.hypot(en.x - player.x, en.y - player.y); }
+        });
+
+        render();
+        requestAnimationFrame(update);
+    }
+
+    function render() {
+        ctx.fillStyle = "#0a0a0a"; ctx.fillRect(0,0,canvas.width, canvas.height/2);
+        ctx.fillStyle = "#1a1a1a"; ctx.fillRect(0,canvas.height/2,canvas.width, canvas.height/2);
+        let z = [];
+        for(let i=0; i<canvas.width; i++) {
+            let a = (player.dir - 0.5) + (i/canvas.width);
+            let d = 0, hit = 0;
+            while(hit === 0 && d < 10) {
+                d += 0.05;
+                hit = map[Math.floor(player.y+Math.sin(a)*d)][Math.floor(player.x+Math.cos(a)*d)];
+            }
+            z[i] = d;
+            let h = canvas.height / (d * Math.cos(a-player.dir));
+            ctx.fillStyle = (hit === 2) ? "#fff" : wallColors[currentLevel-1];
+            ctx.globalAlpha = 1 - (d/10);
+            ctx.fillRect(i, (canvas.height-h)/2, 1, h);
+            ctx.globalAlpha = 1;
+        }
+        enemies.sort((a,b)=>b.dist-a.dist).forEach(en => {
+            if(!en.alive && en.emoji === "💥") setTimeout(()=>en.emoji="", 500);
+            if(!en.emoji) return;
+            let ang = Math.atan2(en.y-player.y, en.x-player.x) - player.dir;
+            while(ang < -Math.PI) ang += Math.PI*2; while(ang > Math.PI) ang -= Math.PI*2;
+            let x = (ang + 0.5) * canvas.width;
+            if(x > 0 && x < canvas.width && z[Math.floor(x)] > en.dist) {
+                let s = canvas.height / en.dist;
+                ctx.font = `${s}px Arial`; ctx.textAlign = "center";
+                ctx.fillText(en.emoji, x, canvas.height/2+s/3);
+            }
+        });
+    }
+
+    initLevel();
+    update();
+</script>
+</body>
+</html>
+
