@@ -26,8 +26,8 @@
         }
         .hud {
             position: absolute; top: 0; left: 0; width: 100%;
-            display: flex; justify-content: space-around;
-            background: rgba(0,0,0,0.7); padding: 5px; font-weight: bold;
+            display: flex; justify-content: space-around; align-items: center;
+            background: rgba(0,0,0,0.7); padding: 5px; font-weight: bold; font-size: 13px;
         }
         #gamepad {
             width: 100%; height: 55vh;
@@ -52,6 +52,11 @@
             font-size: 24px; font-weight: bold; text-align: center; display: none;
             text-shadow: 2px 2px #000; z-index: 100;
         }
+        #countdown-overlay {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            font-size: 50px; font-weight: bold; color: #f1c40f; text-align: center;
+            display: none; text-shadow: 3px 3px #000; z-index: 200; pointer-events: none;
+        }
     </style>
 </head>
 <body>
@@ -60,10 +65,12 @@
     <div id="flash"></div>
     <canvas id="screen"></canvas>
     <div id="crosshair">➕</div>
+    <div id="countdown-overlay">5</div>
     <div class="hud">
-        <span style="color:#ff3333">HP: <span id="hp">100</span>%</span>
+        <span style="color:#ff3333">HP: <span id="hp">100</span>% <span id="doom-face" style="font-size: 20px; margin-left: 5px;">😎</span></span>
         <span style="color:#f1c40f">FASE: <span id="lvl">1</span></span>
-        <span style="color:#33ff33">ALVOS: <span id="cnt">10</span></span>
+        <span style="color:#33ff33">RESTAM: <span id="cnt">10</span></span>
+        <span style="color:#00ffff">ARMA: <span id="gun-name">Pistola</span></span>
     </div>
     <div id="msg"></div>
 </div>
@@ -85,8 +92,20 @@
     canvas.width = 160; canvas.height = 120;
 
     let currentLevel = 1, kills = 0, hp = 100, exitOpen = false;
-    const wallColors = ["#ff3333", "#33ff33", "#3333ff", "#ffff33", "#ff8833", "#cc33ff", "#33ffff", "#ffffff", "#888888", "#ff0088"];
-    const emojis = ["👹", "👽", "💀", "🧛🏻‍♂️", "🧟‍♂️", "🕷️", "👁️", "🦂", "🧌", "🐲"];
+    let gameActive = false;
+    let heart = { active: false, x: 0, y: 0, dist: 0, timer: null };
+    let weaponBox = { active: false, x: 0, y: 0, dist: 0, timer: null };
+   
+    const wallColors = ["#ff3333", "#33ff33", "#3333ff", "#ffff33", "#ff8833", "#cc33ff", "#33ffff", "#ff00ff", "#888888", "#ff0088", "#00ffcc"];
+    const emojis = ["👹", "👽", "💀", "🧟‍♂️", "🧌", "🕷️", "👁️", "👺", "🧛🏻‍♂️", "🐲"];
+   
+    const weapons = [
+        { name: "Pistola", emoji: "💥", count: 1 },
+        { name: "Calibre 12", emoji: "💥🔥💥", count: 3 },
+        { name: "Fuzil", emoji: "🔥", count: 5 },
+        { name: "Metralhadora", emoji: "🔥", count: 7 }
+    ];
+    let currentWeaponIndex = 0;
 
     let map = [];
     const baseMap = [
@@ -97,6 +116,80 @@
     let player = { x: 1.5, y: 1.5, dir: 0, speed: 0.08, rot: 0.1 };
     let inputs = { u: false, d: false, l: false, r: false };
     let enemies = [];
+
+    function updateDoomFace() {
+        const faceEl = document.getElementById('doom-face');
+        let currentHp = Math.floor(hp);
+        if (currentHp <= 0) {
+            faceEl.innerText = "💀";
+        } else if (currentHp <= 10) {
+            faceEl.innerText = "😵";
+        } else if (currentHp < 50) {
+            faceEl.innerText = "🤕";
+        } else if (currentHp === 50) {
+            faceEl.innerText = "😬";
+        } else if (currentHp < 75) {
+            faceEl.innerText = "😐";
+        } else {
+            faceEl.innerText = "😎";
+        }
+    }
+
+    // Sons específicos e diferentes para cada arma
+    function playGunShot(type) {
+        if (audioCtx.state === 'suspended') audioCtx.resume();
+        const t = audioCtx.currentTime;
+
+        if (type === 0) {
+            // Pistola: Som clássico original seco
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.type = 'sawtooth';
+            osc.frequency.setValueAtTime(300, t);
+            osc.frequency.exponentialRampToValueAtTime(40, t + 0.12);
+            gain.gain.setValueAtTime(0.3, t);
+            gain.gain.linearRampToValueAtTime(0.01, t + 0.12);
+            osc.connect(gain); gain.connect(audioCtx.destination);
+            osc.start(t); osc.stop(t + 0.12);
+        } else if (type === 1) {
+            // Calibre 12: Grave pesado e estrondoso
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.type = 'triangle';
+            osc.frequency.setValueAtTime(140, t);
+            osc.frequency.exponentialRampToValueAtTime(15, t + 0.28);
+            gain.gain.setValueAtTime(0.5, t);
+            gain.gain.linearRampToValueAtTime(0.01, t + 0.28);
+            osc.connect(gain); gain.connect(audioCtx.destination);
+            osc.start(t); osc.stop(t + 0.28);
+        } else if (type === 2) {
+            // Foguetinho: Efeito de assobio subindo e explodindo
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(180, t);
+            osc.frequency.exponentialRampToValueAtTime(700, t + 0.15);
+            osc.frequency.exponentialRampToValueAtTime(50, t + 0.35);
+            gain.gain.setValueAtTime(0.4, t);
+            gain.gain.linearRampToValueAtTime(0.01, t + 0.35);
+            osc.connect(gain); gain.connect(audioCtx.destination);
+            osc.start(t); osc.stop(t + 0.35);
+        } else {
+            // Metralhadora: Rajada rápida em sequência
+            for (let i = 0; i < 3; i++) {
+                let st = t + (i * 0.05);
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.type = 'square';
+                osc.frequency.setValueAtTime(450 - (i * 30), st);
+                osc.frequency.exponentialRampToValueAtTime(80, st + 0.05);
+                gain.gain.setValueAtTime(0.25, st);
+                gain.gain.linearRampToValueAtTime(0.01, st + 0.05);
+                osc.connect(gain); gain.connect(audioCtx.destination);
+                osc.start(st); osc.stop(st + 0.05);
+            }
+        }
+    }
 
     function playSound(freq, dur) {
         if (audioCtx.state === 'suspended') audioCtx.resume();
@@ -109,47 +202,137 @@
         osc.start(); osc.stop(audioCtx.currentTime + dur);
     }
 
+    function spawnHeart() {
+        if (hp <= 0 || !gameActive || heart.active) return;
+        let rx, ry;
+        do { rx = Math.random()*8+1; ry = Math.random()*8+1; } while(map[Math.floor(ry)][Math.floor(rx)] !== 0);
+        heart.x = rx;
+        heart.y = ry;
+        heart.active = true;
+        showMsg("💊 RECUPERAÇÃO DE VIDA!");
+    }
+
+    function setupHeartTimer() {
+        clearInterval(heart.timer);
+        heart.active = false;
+        heart.timer = setInterval(() => {
+            spawnHeart();
+        }, 15000);
+    }
+
+    function spawnWeaponBox() {
+        if (hp <= 0 || !gameActive || weaponBox.active) return;
+        let rx, ry;
+        do { rx = Math.random()*8+1; ry = Math.random()*8+1; } while(map[Math.floor(ry)][Math.floor(rx)] !== 0);
+        weaponBox.x = rx;
+        weaponBox.y = ry;
+        weaponBox.active = true;
+        showMsg("🚀 NOVA ARMA ESCONDIDA!");
+    }
+
+    function setupWeaponTimer() {
+        clearInterval(weaponBox.timer);
+        weaponBox.active = false;
+        weaponBox.timer = setInterval(() => {
+            spawnWeaponBox();
+        }, 12000);
+    }
+
+    function startCountdown() {
+        gameActive = false;
+        let count = 5;
+        const overlay = document.getElementById('countdown-overlay');
+        overlay.innerText = count;
+        overlay.style.display = "block";
+
+        let timer = setInterval(() => {
+            count--;
+            if (count > 0) {
+                overlay.innerText = count;
+                playSound(600, 0.1);
+            } else {
+                clearInterval(timer);
+                overlay.innerText = "FOGO!";
+                playSound(800, 0.2);
+                setTimeout(() => {
+                    overlay.style.display = "none";
+                    gameActive = true;
+                }, 600);
+            }
+        }, 1000);
+    }
+
     function initLevel() {
         map = baseMap.map(r => [...r]);
         enemies = []; kills = 0; exitOpen = false;
+        player.x = 1.5; player.y = 1.5; player.dir = 0;
+
+        let totalEnemies = (currentLevel === 11) ? 1000 : (currentLevel * 10);
+
         document.getElementById('hp').innerText = Math.floor(hp);
+        updateDoomFace();
         document.getElementById('lvl').innerText = currentLevel;
-        document.getElementById('cnt').innerText = 10;
-       
-        for(let i=0; i<10; i++) {
-            let rx, ry;
-            do { rx = Math.random()*8+1; ry = Math.random()*8+1; } while(map[Math.floor(ry)][Math.floor(rx)] !== 0);
-            enemies.push({
-                x: rx, y: ry, alive: true, emoji: emojis[currentLevel-1],
-                vx: (Math.random() - 0.5) * 0.02,
-                vy: (Math.random() - 0.5) * 0.02
+        document.getElementById('cnt').innerText = totalEnemies;
+        document.getElementById('gun-name').innerText = weapons[currentWeaponIndex].name;
+
+        if (currentLevel === 11) {
+            emojis.forEach(emo => {
+                for(let i=0; i<100; i++) {
+                    let rx, ry;
+                    do { rx = Math.random()*8+1; ry = Math.random()*8+1; } while(map[Math.floor(ry)][Math.floor(rx)] !== 0);
+                    enemies.push({
+                        x: rx, y: ry, alive: true, emoji: emo,
+                        vx: (Math.random() - 0.5) * 0.03,
+                        vy: (Math.random() - 0.5) * 0.03
+                    });
+                }
             });
+        } else {
+            for(let i=0; i<totalEnemies; i++) {
+                let rx, ry;
+                do { rx = Math.random()*8+1; ry = Math.random()*8+1; } while(map[Math.floor(ry)][Math.floor(rx)] !== 0);
+                enemies.push({
+                    x: rx, y: ry, alive: true, emoji: emojis[currentLevel-1],
+                    vx: (Math.random() - 0.5) * 0.02,
+                    vy: (Math.random() - 0.5) * 0.02
+                });
+            }
         }
+
+        setupHeartTimer();
+        setupWeaponTimer();
+        startCountdown();
     }
 
     function shoot() {
-        playSound(100, 0.2);
+        if (!gameActive) return;
+        playGunShot(currentWeaponIndex); // Dispara o som específico da arma atual
         document.getElementById('view-container').style.transform = `translateY(-10px)`;
-        document.getElementById('crosshair').innerText = "💥";
+        document.getElementById('crosshair').innerText = weapons[currentWeaponIndex].emoji;
         setTimeout(() => {
             document.getElementById('view-container').style.transform = `translateY(0)`;
             document.getElementById('crosshair').innerText = "➕";
         }, 80);
 
+        let w = weapons[currentWeaponIndex];
+        let totalEnemies = (currentLevel === 11) ? 1000 : (currentLevel * 10);
         enemies.sort((a,b) => a.dist - b.dist);
+       
+        let hitCount = 0;
         for(let en of enemies) {
             if(!en.alive) continue;
             let ang = Math.atan2(en.y - player.y, en.x - player.x) - player.dir;
             while(ang < -Math.PI) ang += Math.PI*2; while(ang > Math.PI) ang -= Math.PI*2;
-            if(Math.abs(ang) < 0.3 && en.dist < 5) {
+            if(Math.abs(ang) < 0.4 && en.dist < 6) {
                 en.alive = false; en.emoji = "💥";
                 kills++;
-                document.getElementById('cnt').innerText = 10 - kills;
-                if(kills >= 10) {
+                hitCount++;
+                document.getElementById('cnt').innerText = totalEnemies - kills;
+                if(kills >= totalEnemies) {
                     map[1][8] = 2; exitOpen = true;
-                    showMsg("🚪 PORTA ABERTA!");
+                    showMsg("🌀 PORTAL ABERTO!");
                 }
-                break;
+                if(hitCount >= w.count) break;
             }
         }
     }
@@ -177,32 +360,69 @@
             let nx = player.x + Math.cos(player.dir)*m, ny = player.y + Math.sin(player.dir)*m;
             let tile = map[Math.floor(ny)][Math.floor(nx)];
             if(tile === 0) { player.x = nx; player.y = ny; }
-            if(tile === 2) {
+            if(tile === 2 && exitOpen) {
                 currentLevel++;
-                hp = Math.min(100, hp + 15); // Ganha vida ao passar
+                hp = Math.min(100, hp + 25);
+                document.getElementById('hp').innerText = Math.floor(hp);
+                updateDoomFace();
                 initLevel();
+            }
+        }
+
+        if(heart.active) {
+            heart.dist = Math.hypot(player.x - heart.x, player.y - heart.y);
+            if(heart.dist < 0.4) {
+                hp = Math.min(100, hp + 25);
+                document.getElementById('hp').innerText = Math.floor(hp);
+                updateDoomFace();
+                heart.active = false;
+                showMsg("💊 VIDA +25%!");
+                playSound(400, 0.1);
+            }
+        }
+
+        if(weaponBox.active) {
+            weaponBox.dist = Math.hypot(player.x - weaponBox.x, player.y - weaponBox.y);
+            if(weaponBox.dist < 0.4) {
+                weaponBox.active = false;
+                if(currentWeaponIndex < weapons.length - 1) {
+                    currentWeaponIndex++;
+                }
+                showMsg("🔥 NOVA ARMA: " + weapons[currentWeaponIndex].name.toUpperCase() + "!");
+                document.getElementById('gun-name').innerText = weapons[currentWeaponIndex].name;
+                playSound(500, 0.15);
             }
         }
 
         enemies.forEach(en => {
             if(en.alive) {
-                // Movimento Aleatório
-                let nx = en.x + en.vx;
-                let ny = en.y + en.vy;
-                if(map[Math.floor(ny)][Math.floor(nx)] === 0) {
-                    en.x = nx; en.y = ny;
-                } else {
-                    en.vx = (Math.random() - 0.5) * 0.03;
-                    en.vy = (Math.random() - 0.5) * 0.03;
-                }
+                if (gameActive) {
+                    let nx = en.x + en.vx;
+                    let ny = en.y + en.vy;
+                    if(map[Math.floor(ny)][Math.floor(nx)] === 0) {
+                        en.x = nx; en.y = ny;
+                    } else {
+                        en.vx = (Math.random() - 0.5) * 0.03;
+                        en.vy = (Math.random() - 0.5) * 0.03;
+                    }
 
-                en.dist = Math.hypot(player.x - en.x, player.y - en.y);
-                if(en.dist < 0.4) {
-                    hp -= 1; // Perda de 1%
-                    document.getElementById('hp').innerText = Math.floor(hp);
-                    document.getElementById('flash').style.opacity = 0.5;
-                    setTimeout(()=>document.getElementById('flash').style.opacity = 0, 50);
-                    if(hp <= 0) { showMsg("FIM DE JOGO"); setTimeout(()=>location.reload(), 2000); }
+                    en.dist = Math.hypot(player.x - en.x, player.y - en.y);
+                    if(en.dist < 0.4) {
+                        hp -= 1;
+                        document.getElementById('hp').innerText = Math.floor(hp);
+                        updateDoomFace();
+                        document.getElementById('flash').style.opacity = 0.5;
+                        setTimeout(()=>document.getElementById('flash').style.opacity = 0, 50);
+                        if(hp <= 0) {
+                            clearInterval(heart.timer);
+                            clearInterval(weaponBox.timer);
+                            updateDoomFace();
+                            showMsg("FIM DE JOGO");
+                            setTimeout(()=>location.reload(), 2000);
+                        }
+                    }
+                } else {
+                    en.dist = Math.hypot(player.x - en.x, player.y - en.y);
                 }
             } else { en.dist = Math.hypot(en.x - player.x, en.y - player.y); }
         });
@@ -224,11 +444,34 @@
             }
             z[i] = d;
             let h = canvas.height / (d * Math.cos(a-player.dir));
-            ctx.fillStyle = (hit === 2) ? "#fff" : wallColors[currentLevel-1];
+            ctx.fillStyle = (hit === 2) ? "#9b59b6" : wallColors[(currentLevel - 1) % wallColors.length];
             ctx.globalAlpha = 1 - (d/10);
             ctx.fillRect(i, (canvas.height-h)/2, 1, h);
             ctx.globalAlpha = 1;
         }
+
+        if(heart.active) {
+            let angHeart = Math.atan2(heart.y-player.y, heart.x-player.x) - player.dir;
+            while(angHeart < -Math.PI) angHeart += Math.PI*2; while(angHeart > Math.PI) angHeart -= Math.PI*2;
+            let x = (angHeart + 0.5) * canvas.width;
+            if(x > 0 && x < canvas.width && z[Math.floor(x)] > heart.dist) {
+                let s = canvas.height / heart.dist;
+                ctx.font = `${s}px Arial`; ctx.textAlign = "center";
+                ctx.fillText("💊", x, canvas.height/2+s/3);
+            }
+        }
+
+        if(weaponBox.active) {
+            let angBox = Math.atan2(weaponBox.y-player.y, weaponBox.x-player.x) - player.dir;
+            while(angBox < -Math.PI) angBox += Math.PI*2; while(angBox > Math.PI) angBox -= Math.PI*2;
+            let x = (angBox + 0.5) * canvas.width;
+            if(x > 0 && x < canvas.width && z[Math.floor(x)] > weaponBox.dist) {
+                let s = canvas.height / weaponBox.dist;
+                ctx.font = `${s}px Arial`; ctx.textAlign = "center";
+                ctx.fillText("🚀", x, canvas.height/2+s/3);
+            }
+        }
+
         enemies.sort((a,b)=>b.dist-a.dist).forEach(en => {
             if(!en.alive && en.emoji === "💥") setTimeout(()=>en.emoji="", 500);
             if(!en.emoji) return;
@@ -236,7 +479,7 @@
             while(ang < -Math.PI) ang += Math.PI*2; while(ang > Math.PI) ang -= Math.PI*2;
             let x = (ang + 0.5) * canvas.width;
             if(x > 0 && x < canvas.width && z[Math.floor(x)] > en.dist) {
-                let s = canvas.height / en.dist;
+                let s = Math.min(canvas.height, canvas.height / en.dist);
                 ctx.font = `${s}px Arial`; ctx.textAlign = "center";
                 ctx.fillText(en.emoji, x, canvas.height/2+s/3);
             }
@@ -246,6 +489,8 @@
     initLevel();
     update();
 </script>
+
 </body>
 </html>
+ 
 
